@@ -1,0 +1,24 @@
+# Core
+python-dotenv
+
+# LLM + Agents
+langchain
+langgraph
+langchain-google-genai
+
+# MCP
+langchain-mcp-adapters
+mcp
+
+# Data Analysis
+pandas
+numpy
+
+# Visualization
+matplotlib
+seaborn
+plotly
+
+# Utils
+ipython
+chardet
