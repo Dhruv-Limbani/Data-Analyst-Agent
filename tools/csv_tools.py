@@ -195,23 +195,59 @@ def analyze_csv_metadata(
     columns_subset: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Analyze a CSV file from user uploads and return comprehensive metadata for each column.
-    
-    This tool reads a CSV file from the temp_data_files directory (where user uploads
-    are stored) and provides detailed statistics and information about each column 
-    including data types, missing values, sample data, and statistical summaries.
-    
+    Analyze a CSV file uploaded by the user and generate comprehensive metadata for each column.
+
+    Purpose:
+        This tool is designed to inspect CSV files stored in the temp_data_files directory.
+        It provides detailed insights into each column, including data type, missing values,
+        unique values, sample entries, and statistical summaries for numeric columns.
+        This metadata helps the main LLM or downstream tools decide how to further process
+        or analyze the dataset.
+
     Args:
-        filename: Name of the CSV file to analyze (will look in temp_data_files directory)
-                 Can be just filename (e.g., "data.csv") or relative path
-        use_cache: Whether to use cached results if available (default: True)
-        nrows: Number of rows to read (None = read all rows)
-        columns_subset: List of specific columns to analyze (None = all columns)
-    
+        filename (str):
+            The name of the CSV file to analyze. Can be a simple filename (e.g., "data.csv")
+            or a relative path. The tool prioritizes the temp_data_files directory where user
+            uploads are stored.
+        use_cache (bool, default=True):
+            If True, previously computed metadata for the same file and parameters will be
+            reused from the cache, improving performance. Set to False to force fresh analysis.
+        nrows (Optional[int], default=None):
+            Number of rows to read from the CSV file. If None, the entire file is read.
+            Useful for previewing or sampling large datasets.
+        columns_subset (Optional[List[str]], default=None):
+            A list of specific column names to analyze. If None, all columns are analyzed.
+
     Returns:
-        Dictionary containing comprehensive dataset metadata including:
-        - Dataset info (path, size, dimensions, memory usage)
-        - Per-column metadata (type, missing values, stats, sample values)
+        Dict[str, Any]:
+            A dictionary containing the analysis results, structured as follows:
+            - success (bool): Whether the analysis was successful.
+            - dataset_info (dict):
+                * file_path: Absolute path to the CSV file.
+                * file_size_mb: File size in megabytes.
+                * rows: Number of rows in the dataset.
+                * columns: Number of columns in the dataset.
+                * memory_usage_mb: Memory usage of the DataFrame in MB.
+                * column_names: List of all column names.
+            - column_metadata (dict): Per-column analysis including:
+                * data type
+                * number of missing values
+                * number of unique values
+                * sample values
+                * summary statistics (for numeric columns: mean, min, max, std, quartiles)
+                * any errors encountered during analysis
+            - analysis_parameters (dict):
+                * rows_analyzed: Number of rows actually analyzed.
+                * columns_analyzed: List of columns analyzed.
+                * used_cache: Whether cached results were used.
+
+    Notes:
+        - If the file does not exist or cannot be read, `success` will be False and an
+          `error` message will be included.
+        - Metadata is cached by default to improve performance for repeated analyses.
+        - Designed to integrate seamlessly with ReAct-style agents and MCP servers,
+          allowing LLMs to call this tool and reason about CSV contents without
+          manually reading the file.
     """
     try:
         # Resolve file path (prioritize temp_data_files directory)
@@ -299,10 +335,39 @@ def analyze_csv_metadata(
 @mcp.tool()
 def list_uploaded_csv_files() -> Dict[str, Any]:
     """
-    List all CSV files in the temp_data_files directory where user uploads are stored.
-    
+    List all CSV files that have been uploaded by the user in the temp_data_files directory.
+
+    Purpose:
+        This tool helps the main LLM or ReAct agent discover which CSV files are available
+        for analysis. It provides metadata about each file, allowing the LLM to reason about
+        file selection, prioritization, and further processing. Useful when the user has not
+        specified a file, or when multiple CSVs are present.
+
+    Args:
+        None
+
     Returns:
-        Dictionary containing list of uploaded CSV files with their metadata
+        Dict[str, Any]:
+            A dictionary containing information about uploaded CSV files:
+            - success (bool): Whether the operation was successful.
+            - directory (str): Absolute path to the upload directory.
+            - csv_files (list[dict]): List of CSV files with the following metadata for each:
+                * filename: Name of the CSV file.
+                * full_path: Absolute file path.
+                * size_mb: File size in megabytes.
+                * size_kb: File size in kilobytes.
+                * modified_timestamp: Last modification timestamp (epoch seconds).
+            - count (int): Number of CSV files found.
+            - message (str): Informative message about the result.
+            - error (str, optional): Error message if operation failed.
+
+    Notes:
+        - If the upload directory does not exist, it will be automatically created.
+        - If the path exists but is not a directory, the tool will return an error.
+        - The list of CSV files is sorted by modification time (newest first).
+        - This tool does not read file contents; it only provides metadata.
+        - Designed for integration with LLM agents to guide file selection
+          and downstream data analysis workflows.
     """
     try:
         upload_dir = os.path.abspath(UPLOAD_DIRECTORY)
@@ -363,14 +428,41 @@ def list_uploaded_csv_files() -> Dict[str, Any]:
 @mcp.tool()
 def list_csv_files(directory_path: str = ".", recursive: bool = False) -> Dict[str, Any]:
     """
-    List all CSV files in a specified directory (fallback for searching other locations).
-    
+    List all CSV files in a specified directory, optionally including subdirectories.
+
+    Purpose:
+        This tool allows the LLM or main agent to discover CSV files in arbitrary
+        directories on the system. Useful as a fallback or supplementary tool when
+        user uploads are not available or additional data sources are needed.
+
     Args:
-        directory_path: Directory to search for CSV files (default: current directory)
-        recursive: Whether to search subdirectories recursively (default: False)
-    
+        directory_path (str): Directory to search for CSV files. Default is the current
+                              working directory.
+        recursive (bool): If True, search all subdirectories recursively. Default is False.
+
     Returns:
-        Dictionary containing list of CSV files found with their metadata
+        Dict[str, Any]:
+            A dictionary containing information about CSV files found:
+            - success (bool): Whether the operation was successful.
+            - directory (str): Absolute path of the searched directory.
+            - csv_files (list[dict]): List of CSV files with metadata:
+                * filename: Name of the CSV file.
+                * full_path: Absolute path to the file.
+                * directory: Directory containing the file.
+                * size_mb: File size in megabytes.
+                * modified_timestamp: Last modification timestamp (epoch seconds).
+            - count (int): Number of CSV files found.
+            - recursive_search (bool): Whether the search was recursive.
+            - error (str, optional): Error message if operation failed.
+
+    Notes:
+        - If the directory does not exist or is not a valid directory, the tool returns
+          an error.
+        - Files are sorted by size, largest first, to help prioritize analysis of
+          potentially more important datasets.
+        - This tool only lists metadata; it does not read file contents.
+        - Designed for LLM integration to guide intelligent file selection and
+          downstream CSV analysis workflows.
     """
     try:
         abs_dir = os.path.abspath(directory_path)
@@ -432,15 +524,42 @@ def get_csv_preview(
     columns: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Get a quick preview of a CSV file from user uploads.
-    
+    Generate a quick preview of a CSV file from user uploads.
+
+    Purpose:
+        This tool allows the LLM or main agent to quickly inspect the contents of a
+        CSV file without performing full analysis. Useful for understanding the
+        structure, column types, and sample data to plan further processing.
+
     Args:
-        filename: Name of the CSV file to preview (from temp_data_files directory)
-        nrows: Number of rows to preview (default: 5)
-        columns: Specific columns to include in preview (default: all)
-    
+        filename (str): Name of the CSV file to preview (located in temp_data_files
+                        directory).
+        nrows (int): Number of rows to include in the preview. Default is 5.
+        columns (Optional[List[str]]): List of column names to include in the preview.
+                                       Default is None (all columns are included).
+
     Returns:
-        Dictionary containing preview data and basic file information
+        Dict[str, Any]:
+            A dictionary containing preview information:
+            - success (bool): Whether the operation succeeded.
+            - filename (str): CSV filename.
+            - file_path (str): Absolute path of the file.
+            - preview_rows (int): Number of rows returned in preview.
+            - total_columns (int): Total number of columns in the CSV.
+            - column_names (List[str]): List of column names included in the preview.
+            - data_types (Dict[str, str]): Data types of each column.
+            - preview_data (List[Dict]): List of row dictionaries with column values.
+            - error (str, optional): Error message if operation failed.
+            - searched_locations (List[str], optional): Paths searched if file not found.
+
+    Notes:
+        - Converts all values to strings for uniform preview display; missing values
+          are represented as None.
+        - Does not modify the CSV file or cache results.
+        - Designed for LLM integration to allow planning further analysis based on
+          column names, types, and sample data.
+        - Can be combined with `analyze_csv_metadata` to obtain full column statistics
+          after inspecting the preview.
     """
     try:
         abs_path = resolve_file_path(filename)
@@ -499,10 +618,29 @@ def get_csv_preview(
 @mcp.tool()
 def clear_metadata_cache() -> Dict[str, Any]:
     """
-    Clear the cached metadata to force fresh analysis on next request.
-    
+    Clear all cached CSV metadata to ensure fresh analysis on the next request.
+
+    Purpose:
+        This tool is useful when cached results may be outdated or if new CSV files 
+        have been uploaded. Clearing the cache ensures that subsequent calls to 
+        `analyze_csv_metadata` return up-to-date metadata.
+
+    Args:
+        None
+
     Returns:
-        Dictionary confirming cache was cleared
+        Dict[str, Any]:
+            - success (bool): Indicates whether the cache was successfully cleared.
+            - message (str): Descriptive message indicating how many cache entries were cleared.
+            - cache_size_before (int): Number of cached entries before clearing.
+            - cache_size_after (int): Number of cached entries after clearing (always 0).
+
+    Notes:
+        - This tool does not perform any analysis itself; it only clears internal cache.
+        - Useful in interactive workflows when new files are uploaded or previous analysis 
+          may be stale.
+        - Can be called programmatically by the main LLM agent to ensure fresh metadata 
+          before running complex analysis.
     """
     global METADATA_CACHE
     cache_size = len(METADATA_CACHE)
