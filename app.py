@@ -4,11 +4,22 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langchain.chat_models import init_chat_model
 from langchain.schema import HumanMessage, SystemMessage
-from langchain_core.prompts import PromptTemplate
 from dotenv import load_dotenv
 import os
 import shutil
 import logging
+import base64
+from pathlib import Path
+import re
+
+# Get the absolute path to the directory where the tools are located
+TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
+
+# --- Configuration and Setup ---
+UPLOAD_DIRECTORY = os.path.join(TOOLS_DIR, "temp_data_files")
+PLOT_DIRECTORY = os.path.join(TOOLS_DIR, "temp_plot_images")
+os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+os.makedirs(PLOT_DIRECTORY, exist_ok=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,45 +28,99 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# --- Configuration and Setup ---
-UPLOAD_DIRECTORY = "temp_data_files"
-os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+# --- HACK: Base64 and HTML for images ---
+def img_to_bytes(img_path):
+    img_bytes = Path(img_path).read_bytes()
+    encoded = base64.b64encode(img_bytes).decode()
+    return encoded
+
+def img_to_html(img_path):
+    # Adjusting for different image formats if needed
+    img_type = "image/png"
+    if img_path.endswith('.jpg') or img_path.endswith('.jpeg'):
+        img_type = "image/jpeg"
+    img_html = f"<p align='center'><img src='data:{img_type};base64,{img_to_bytes(img_path)}' style='max-width:100%; height:auto;'></p>"
+    return img_html
+    
+# --- display_message_content for interleaved output ---
+import re
+
+def display_message_content(message_content):
+    if isinstance(message_content, str):
+        # Use regex to find all potential image paths within the string
+        # This will work regardless of where the path appears
+        message_content = message_content.replace("/Users/dhruv/Projects/Data Analyst Agent/","")
+        image_paths = re.findall(r"(\S+temp_plot_images/\S+\.png)", message_content)
+        
+        # Replace each found path with the Base64-encoded HTML
+        for path in image_paths:
+            if os.path.exists(path):
+                image_html = img_to_html(path)
+                message_content = message_content.replace(path, image_html)
+        
+        st.markdown(message_content, unsafe_allow_html=True)
+        
+    elif isinstance(message_content, list):
+        full_text_with_images = ""
+        for item in message_content:
+            if isinstance(item, str):
+                image_paths = re.findall(r"(\S+temp_plot_images/\S+\.png)", item)
+                if image_paths and os.path.exists(image_paths[0]):
+                    # If an image path is found, replace it with HTML
+                    html_content = img_to_html(image_paths[0])
+                    # Re-render the string after replacing the path
+                    full_text_with_images += item.replace(image_paths[0], html_content)
+                else:
+                    full_text_with_images += item
+            else:
+                full_text_with_images += str(item)
+            
+            full_text_with_images += "\n" # Add a newline to separate list items
+        
+        st.markdown(full_text_with_images, unsafe_allow_html=True)
+        
+    else:
+        st.markdown(str(message_content))
 
 # Define the system prompt for the agent
-SYSTEM_PROMPT = """
-You are a highly skilled Data Analyst AI Assistant. Your purpose is to help users analyze and understand their CSV data.
-You have access to a set of specialized tools to perform your tasks.
+SYSTEM_PROMPT = f"""
+You are a highly skilled Data Analyst AI Assistant. Your purpose is to help users analyze and understand their CSV data. You have access to a set of specialized tools to perform your tasks.
 
 Your core workflow is as follows:
-1.  **Acknowledge and Greet:** Start by greeting the user and asking them to upload a CSV file if one is not already present.
-2.  **File Discovery:** If a user asks about available files, use the `list_uploaded_csv_files` tool to see what's in the `{UPLOAD_DIRECTORY}` directory.
-3.  **Initial Analysis:** When a new CSV file is uploaded, first use the `analyze_csv_metadata` tool to get a comprehensive overview of the dataset. This includes column names, data types, missing values, and key statistics. This step is crucial for understanding the data's structure and contents.
-4.  **Preview Data:** You can use the `get_csv_preview` tool to quickly display a few sample rows to the user, providing a glimpse of the data's format and content.
-5.  **Execution and Computation:** For specific analysis tasks (e.g., "what's the average sales?", "find the top 5 customers"), use the `run_pandas_code` tool. This tool allows you to execute Python code (specifically with pandas) to perform calculations, aggregations, and data manipulations.
-    - **Crucial Note:** When using `run_pandas_code`, ensure your code operates on a DataFrame named `df`. Your code should produce a result that can be directly displayed or reasoned upon.
-    - **Example:** To find the top 5 product categories by sales, you would use: `run_pandas_code("your_file.csv", "df.groupby('Category')['Sales'].sum().nlargest(5)")`.
-6.  **Provide Insights:** After performing an analysis, present your findings clearly and concisely. Explain what the data shows and answer the user's question directly.
-7.  **Maintain Context:** Remember the user's uploaded file and the context of the conversation. You don't need to re-analyze metadata for every question unless explicitly asked to or if a new file is uploaded.
-8.  **Error Handling:** If a tool call fails, inform the user about the error and suggest a possible solution.
-9.  **Output Format:** When providing reports or detailed analysis, you MUST format your response using Markdown. Use headings, bullet points, and bold text for readability.
+1.  **Acknowledge and Greet:** Start by greeting the user and asking them to upload a CSV file if one is not already present in {UPLOAD_DIRECTORY}. You check that by using the `list_uploaded_csv_files` tool.
+2. If a file is present, use the `analyze_csv_metadata` tool to get an overview of the dataset.
+3.  **File Discovery:** If a user asks about available files, use the `list_uploaded_csv_files` tool to see what's in the `{UPLOAD_DIRECTORY}` directory.
+4.  **Initial Analysis:** When a new CSV file is uploaded, first use the `analyze_csv_metadata` tool to get a comprehensive overview of the dataset. This step is crucial for understanding the data's structure and contents.
+5.  **Execution and Computation:** For specific analysis tasks, use the `run_pandas_code` tool. Your code must operate on the preloaded DataFrame named `df` and the tool's output will be your result.
+6.  **Data Visualization:** Consider creating visualizations (e.g., charts, graphs) using the `run_plotting_code` tool whenever a plot would significantly enhance the understanding of the data or a particular insight, in addition to explicit user requests. This tool will create and save one or more plots to {PLOT_DIRECTORY}, returning their file paths. Your final response should include these images.
+Note: All the necessary libraries (`numpy` as `np`, `pandas` as `pd, `matplotlib.pyplot` as `plt` and `seaborn` as `sns`) are already imported and available in the execution environment. **You MUST NOT attempt to import them or use any form of the `__import__` function within your code.** Your code should directly use `np`,`pd`,`plt` or `sns` to create visualizations or perform any analysis.
+7.  **Provide a Final Response:** After gathering all necessary data using your tools, stop making tool calls. Synthesize a single, clear, and comprehensive response. The response can contain both text and image references (image paths) to provide a complete answer. Do not output raw tool call results.
 
-### Example of Desired Output Format:
+### Output Formatting Instructions
+You MUST format your final response using Markdown. Follow this strict structure:
+
+-   Begin with a clear introductory sentence.
+-   Use Markdown headings (e.g., `##`, `###`) to structure your report.
+-   Use bold text (`**`) for key metrics or titles.
+-   Use bullet points (`-`) for lists.
+-   Reference images by including the image path directly in your response. For example: `temp_plot_images/a-valid-uuid-here.png`
+-   Ensure all relevant image paths are included at the end of your text response.
+
+### Example of Strict Output Format:
 ---
-I have generated a sales report based on the 'Superstore-Data.csv' file. Here are the key insights for strategic business decisions:
+I have generated a sales report based on the uploaded data.
 
-#### Sales Report
-- **Overall Sales Performance:** Total Sales: $2,297,200.86 | Average Sales per Order: $230.00
-- **Monthly Sales Trends:** Sales show a generally upward trend throughout the year, with significant peaks in November and December, suggesting a strong holiday season or year-end push.
+## Overall Performance Summary
+**Total Sales:** [Total Sales Value from your analysis]
+**Total Profit:** [Total Profit Value from your analysis]
 
-#### Top Product Categories
-- **Top 5 Product Categories by Sales:**
-    - Technology: $837,575.24
-    - Furniture: $741,999.95
-    - Office Supplies: $717,736.67
-- **Top 5 Sub-Categories by Sales:**
-    - Phones: $31,036.50
-    - Chairs: $30,809.09
-    - Storage: $21,809.64
+## Sales Breakdown
+### Top 5 Products by Sales
+-   **Product 1:** [Sales Value]
+-   **Product 2:** [Sales Value]
+
+Here is a visualization of the sales data:
+{PLOT_DIRECTORY}/a-valid-uuid-here.png
 
 ---
 Do not attempt to generate or execute arbitrary Python code directly. You must rely exclusively on the provided tools to interact with the CSV data.
@@ -69,14 +134,10 @@ st.title("📊 CSV Data Analyst Assistant")
 st.info("I am a helpful AI assistant ready to analyze your CSV files. Please upload a file to get started!")
 
 # --- Async Agent Initialization ---
-# Use a global variable to ensure the event loop is started only once.
-# This prevents the "Event loop is closed" error.
-# A custom loop is needed because Streamlit's `asyncio.run` creates and closes a new loop.
 if "loop" not in st.session_state:
     st.session_state.loop = asyncio.new_event_loop()
     asyncio.set_event_loop(st.session_state.loop)
 
-# Wrap async functions for Streamlit's sync context
 def run_async(coro):
     return st.session_state.loop.run_until_complete(coro)
 
@@ -89,7 +150,9 @@ def initialize_agent():
             "local_python_executor": {"command": "python3", "args": ["tools/local_python_executor.py"], "transport": "stdio"}
         })
         tools = run_async(mcp_client.get_tools())
-        llm = init_chat_model("google_genai:gemini-2.5-flash-lite")
+        llm = init_chat_model(
+            "google_genai:gemini-2.5-flash"
+        )
         agent = create_react_agent(llm, tools)
         return mcp_client, agent
     except Exception as e:
@@ -119,6 +182,13 @@ with st.sidebar:
                     os.remove(file_path)
             except Exception as e:
                 logger.error(f"Failed to delete {file_path}. Reason: {e}")
+        for filename in os.listdir(PLOT_DIRECTORY):
+            file_path = os.path.join(PLOT_DIRECTORY, filename)
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            except Exception as e:
+                logger.error(f"Failed to delete {file_path}. Reason: {e}")
         st.info("All uploaded files and chat history have been cleared. You can now upload a new file.")
         st.rerun()
 
@@ -133,7 +203,7 @@ def display_chat_history():
             continue
         else: # Assumed to be AIMessage
             with st.chat_message("assistant"):
-                st.markdown(message.content)
+                display_message_content(message.content)
 
 # --- Main App Logic ---
 if st.session_state.agent:
@@ -166,7 +236,7 @@ if st.session_state.agent:
                     run_async(
                         st.session_state.agent.ainvoke(
                             {"messages": [HumanMessage(content=f"Analyze the newly uploaded file named '{uploaded_file.name}'")]},
-                            config={"configurable": {"thread_id": "1"}}
+                            config={"configurable": {"thread_id": "100"}}
                         )
                     )
             
@@ -191,13 +261,13 @@ if st.session_state.agent:
                     response = run_async(
                         st.session_state.agent.ainvoke(
                             {"messages": st.session_state.chat_history},
-                            config={"configurable": {"thread_id": "1", "recursion_limit": 50}}
+                            config={"configurable": {"thread_id": "100", "recursion_limit": 50}}
                         )
                     )
                     
                     # The response is an AIMessage with content and tool_calls
                     agent_message = response['messages'][-1]
-                    st.markdown(agent_message.content)
+                    display_message_content(agent_message.content)
                     st.session_state.chat_history.append(agent_message)
                     
                 except Exception as e:

@@ -157,7 +157,15 @@ def get_column_metadata(col_data: pd.Series) -> Dict[str, Any]:
     return col_meta
 
 # Constants
-UPLOAD_DIRECTORY = "temp_data_files"
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Constants
+UPLOAD_DIRECTORY = os.path.join(SCRIPT_DIR, "temp_data_files")
+PLOT_DIRECTORY = os.path.join(SCRIPT_DIR, "temp_plot_images")
+
+os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+os.makedirs(PLOT_DIRECTORY, exist_ok=True)
 
 # Initialize FastMCP
 mcp = FastMCP("CSV Data Analyzer")

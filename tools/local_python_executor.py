@@ -2,6 +2,9 @@ import io
 import traceback
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import uuid
 import ast
 import os
 from typing import Dict, Any, Optional
@@ -12,10 +15,18 @@ import chardet
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Constants
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Constants
-UPLOAD_DIRECTORY = "temp_data_files"
-ALLOWED_MODULES = {"pandas", "numpy"}
+UPLOAD_DIRECTORY = os.path.join(SCRIPT_DIR, "temp_data_files")
+PLOT_DIRECTORY = os.path.join(SCRIPT_DIR, "temp_plot_images")
+
+os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+os.makedirs(PLOT_DIRECTORY, exist_ok=True)
+
+ALLOWED_MODULES = {"pandas", "numpy", "matplotlib", "seaborn"}
 
 mcp = FastMCP("Local Python Executor")
 
@@ -235,6 +246,97 @@ def run_pandas_code(filename: str, code: str, nrows: int = 1000) -> Dict[str, An
             "success": True,
             "stdout": stdout_buf.getvalue(),
             "result": result_str,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+    
+@mcp.tool()
+def run_plotting_code(filename: str, code: str, nrows: int = 1000) -> Dict[str, Any]:
+    """
+    Executes Python code for plotting data on a CSV file.
+
+    Purpose:
+        This tool enables the creation of data visualizations (e.g., charts, graphs)
+        from a CSV file. The generated plot is saved as a temporary image file,
+        and its path is returned. It can handle code that generates multiple plots.
+
+    Args:
+        filename (str): Name of the CSV file to use for plotting.
+        code (str): Python code (matplotlib and/or seaborn focused) to execute. The code must
+                    - Operate on a DataFrame named `df`
+                    - Restricted to safe operations; imports and unsafe functions are blocked.
+                    - Do not use plt.show() as this code is just to generate and save plots.
+        nrows (int, optional): The number of rows to load from the CSV. Defaults to 1000.
+
+    Returns:
+        Dict[str, Any]:
+            - success (bool): True if the plot was created and saved successfully.
+            - image_paths (List[str]): A list of absolute paths to the saved plot images.
+            - stdout (str): Any console output from the code execution.
+            - error (str, optional): An error message if the execution failed.
+    """
+    try:
+        abs_path = resolve_file_path(filename)
+        if not os.path.exists(abs_path):
+            return {"success": False, "error": f"File not found: {filename}"}
+
+        df = safe_read_csv(abs_path, nrows=nrows)
+        if df is None:
+            return {"success": False, "error": "Failed to load CSV"}
+
+        # AST Safety check
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] not in ALLOWED_MODULES:
+                            return {"success": False, "error": f"Illegal import: {alias.name}"}
+                elif isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id in ["exec", "eval", "open", "compile", "__import__"]:
+                        return {"success": False, "error": f"Illegal function call: {node.func.id}"}
+        except Exception as e:
+            return {"success": False, "error": f"Code validation failed: {str(e)}"}
+
+        safe_globals = {
+            "__builtins__": {"print": print},
+            "pd": pd,
+            "np": np,
+            "plt": plt,
+            "sns": sns
+        }
+        safe_locals = {"df": df}
+        stdout_buf = io.StringIO()
+        image_paths = []
+
+        try:
+            # Execute the user-provided code
+            exec(compile(tree, "<plotting_exec>", "exec"), safe_globals, safe_locals)
+            
+            # Save and close all open figures
+            for fig_num in plt.get_fignums():
+                plt.figure(fig_num)
+                plot_filename = f"{uuid.uuid4()}.png"
+                plot_path = os.path.join(PLOT_DIRECTORY, plot_filename)
+                plt.savefig(plot_path)
+                print(f"Plot saved to {plot_path}")
+                image_paths.append(plot_path)
+            
+            # Close all figures to prevent memory leaks and stacking plots
+            plt.close('all')
+
+        except Exception as e:
+            plt.close('all') # Ensure plots are closed even on error
+            return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+        
+        if not image_paths:
+            return {"success": False, "error": "No plots were generated. The plotting code must call a plotting function (e.g., `plt.plot()`, `sns.barplot()`)."}
+
+        return {
+            "success": True,
+            "image_paths": image_paths,
+            "stdout": stdout_buf.getvalue(),
         }
 
     except Exception as e:
