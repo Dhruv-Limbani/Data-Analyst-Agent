@@ -2,6 +2,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langchain.chat_models import init_chat_model
 from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.prompts import PromptTemplate
 import asyncio
 from dotenv import load_dotenv
 
@@ -17,6 +18,7 @@ async def main():
     tools = await client.get_tools()
 
     llm = init_chat_model("google_genai:gemini-2.5-flash-lite")
+
     agent = create_react_agent(llm, tools)
 
     chat_history = []
