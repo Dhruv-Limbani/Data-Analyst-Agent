@@ -22,3 +22,8 @@ plotly
 # Utils
 ipython
 chardet
+
+# UI
+streamlit
+
+nest_asyncio
