@@ -20,8 +20,8 @@ An intelligent assistant that enables end-to-end data analytics on CSV datasets 
 .
 ├── project-demo-images/      # Screenshots demonstrating the assistant
 ├── tools/
-│   ├── csv\_tools.py          # Tool to analyze CSV files
-│   └── local\_python\_executor.py  # Tool to execute Python code
+│   ├── csv_tools.py          # Tool to analyze CSV files
+│   └── local_python_executor.py  # Tool to execute Python code
 ├── app.py                    # Main streamlit application for interactive session through UI
 ├── client.py                 # Client interface for interactive session through cmd
 ├── requirements.txt          # Python dependencies
