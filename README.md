@@ -65,7 +65,12 @@ venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables (if any) using `.env`.
+4. Set up environment variable: 
+create `.env` file and paste the following in it
+
+```code
+GOOGLE_API_KEY=<YOUR_GOOGLE_API_KEY>
+```
 
 ---
 
